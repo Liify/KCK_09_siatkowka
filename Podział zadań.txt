@@ -1,0 +1,3 @@
+Weryfikacja ułożenia ciała - Adam Funt
+Interfejs użytkownika - Marcin Bajerski
+Obsługa danych i głosu - Mateusz Kowalik
