@@ -3,7 +3,7 @@ import cv2
 
 class UI:
     @staticmethod
-    def draw(obraz, user_name, licznik, punkty, tryb_treningu, feedback):
+    def draw(obraz, user_name, licznik, punkty, tryb_treningu, feedback, nazwa_kamery):
         h, w, _ = obraz.shape
 
         # PROSTOKĄT TŁA
@@ -13,7 +13,7 @@ class UI:
         kolor_punktow = (0, 255, 0) if punkty >= 70 else (0, 0, 255)
 
         # NAPISY GŁÓWNE
-        cv2.putText(obraz, f"PROFIL: {user_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.putText(obraz, f"PROFIL: {user_name} | {nazwa_kamery}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         cv2.putText(obraz, f"POWOTORZENIA: {licznik}", (20, 100), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
         cv2.putText(obraz, f"JAKOSC: {punkty}%", (20, 40), cv2.FONT_HERSHEY_DUPLEX, 1, kolor_punktow, 2)
         cv2.putText(obraz, f"TRENING: {tryb_treningu}", (w // 2 - 60, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5,

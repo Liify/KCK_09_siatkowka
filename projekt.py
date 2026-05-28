@@ -1,83 +1,104 @@
 import cv2
-import time
 from camera_config import Config
 from obliczanie import Obliczanie
 from warunki import Warunki
 from UI import UI
-from database_manager import init_db, log_error
-from audio_trener import AudioTrener
+
 
 def main():
-    init_db()
-    audio = AudioTrener()
-
+    # INTERFEJS KONSOLOWY
     user_name = input("Podaj nazwę profilu (imię): ").strip()
     print("\nWybierz tryb treningu:\n1. Odbicia DOLNE\n2. Odbicia GÓRNE")
     wybor = input("Wybór (1 lub 2): ")
     tryb_treningu = "Dolne" if wybor == "1" else "Gorne"
     aktualny_cel = "dol" if tryb_treningu == "Dolne" else "gora"
 
+    # INICJALIZACJA MODUŁÓW
     cfg = Config(user_name, tryb_treningu)
     calc = Obliczanie()
     logic = Warunki()
     ui = UI()
 
+    # ZMIENNE STANU
     licznik = 0
     poprzedni_stan_ruchu = "neutral"
     buffer_stan = []
     BUFFER_SIZE = 4
     cooldown = 0
 
-    db_cooldowns = {}
-    COOLDOWN_TIME = 3.0
+    max_punkty_przod = 0
+    max_punkty_bok = 0
 
-    while cfg.vid.isOpened():
-        ret, frame = cfg.vid.read()
-        if not ret: break
+    while cfg.vid_przod.isOpened() and cfg.vid_bok.isOpened():
+        ret_przod, frame_przod = cfg.vid_przod.read()
+        ret_bok, frame_bok = cfg.vid_bok.read()
 
-        obraz_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        wynik = cfg.holistic.process(obraz_rgb)
-        frame = cv2.cvtColor(obraz_rgb, cv2.COLOR_RGB2BGR)
-        h, w, _ = frame.shape
+        if not ret_przod or not ret_bok:
+            print("Błąd pobierania obrazu z jednej z kamer.")
+            break
 
-        stan_klatki = "neutral"
-        feedback = []
-        punkty = 0
+        # KONWERSJA I PROCESOWANIE
+        rgb_przod = cv2.cvtColor(frame_przod, cv2.COLOR_BGR2RGB)
+        wynik_przod = cfg.holistic_przod.process(rgb_przod)
+        frame_przod = cv2.cvtColor(rgb_przod, cv2.COLOR_RGB2BGR)
+        h_p, w_p, _ = frame_przod.shape
+
+        rgb_bok = cv2.cvtColor(frame_bok, cv2.COLOR_BGR2RGB)
+        wynik_bok = cfg.holistic_bok.process(rgb_bok)
+        frame_bok = cv2.cvtColor(rgb_bok, cv2.COLOR_RGB2BGR)
+        h_b, w_b, _ = frame_bok.shape
+
         if cooldown > 0: cooldown -= 1
 
-        if wynik.pose_landmarks:
-            cfg.mp_drawing.draw_landmarks(frame, wynik.pose_landmarks, cfg.mp_holistic.POSE_CONNECTIONS)
+        data_przod = calc.get_data(wynik_przod.pose_landmarks, w_p, h_p) if wynik_przod.pose_landmarks else None
+        data_bok = calc.get_data(wynik_bok.pose_landmarks, w_b, h_b) if wynik_bok.pose_landmarks else None
 
-            data = calc.get_data(wynik.pose_landmarks, w, h)
-            stan_klatki, punkty, feedback = logic.detect_position(tryb_treningu, data)
+        if wynik_przod.pose_landmarks:
+            cfg.mp_drawing.draw_landmarks(frame_przod, wynik_przod.pose_landmarks, cfg.mp_holistic.POSE_CONNECTIONS)
+        if wynik_bok.pose_landmarks:
+            cfg.mp_drawing.draw_landmarks(frame_bok, wynik_bok.pose_landmarks, cfg.mp_holistic.POSE_CONNECTIONS)
 
-            current_time = time.time()
-            for blad in feedback:
-                if blad not in db_cooldowns or (current_time - db_cooldowns[blad]) > COOLDOWN_TIME:
-                    log_error(user_name, blad)
-                    audio.mow(blad)
-                    db_cooldowns[blad] = current_time
+        stan_klatki, punkty_przod, punkty_bok, feedback_przod, feedback_bok = logic.detect_position(tryb_treningu, data_przod, data_bok)
 
-            buffer_stan.append(stan_klatki)
-            if len(buffer_stan) > BUFFER_SIZE: buffer_stan.pop(0)
-            stan_stabilny = max(set(buffer_stan), key=buffer_stan.count)
+        buffer_stan.append(stan_klatki)
+        if len(buffer_stan) > BUFFER_SIZE: buffer_stan.pop(0)
+        stan_stabilny = max(set(buffer_stan), key=buffer_stan.count)
 
-            if poprzedni_stan_ruchu == aktualny_cel and stan_stabilny == "neutral" and punkty >= 70 and cooldown == 0:
+        # LICZENIE ODBIĆ
+        if stan_stabilny == aktualny_cel:
+            if punkty_przod is not None and punkty_przod > max_punkty_przod:
+                max_punkty_przod = punkty_przod
+            if punkty_bok is not None and punkty_bok > max_punkty_bok:
+                max_punkty_bok = punkty_bok
+
+        if poprzedni_stan_ruchu == aktualny_cel and stan_stabilny == "neutral" and cooldown == 0:
+            if max_punkty_przod >= 70 and max_punkty_bok >= 70:
                 licznik += 1
                 cooldown = 10
 
-            if stan_stabilny != "neutral":
-                poprzedni_stan_ruchu = stan_stabilny
+            max_punkty_przod = 0
+            max_punkty_bok = 0
 
-            ui.draw(frame, user_name, licznik, punkty, tryb_treningu, feedback)
+        if stan_stabilny != "neutral":
+            poprzedni_stan_ruchu = stan_stabilny
 
-        cfg.out.write(frame)
-        cv2.imshow('Siatkowka AI Trainer', frame)
+        # RENDEROWANIE UI
+        punkty_przod_ui = punkty_przod if punkty_przod is not None else 0
+        punkty_bok_ui = punkty_bok if punkty_bok is not None else 0
+        ui.draw(frame_przod, user_name, licznik, punkty_przod_ui, tryb_treningu, feedback_przod, "PRZOD")
+        ui.draw(frame_bok, user_name, licznik, punkty_bok_ui, tryb_treningu, feedback_bok, "BOK")
 
-        if cv2.waitKey(1) & 0xFF == 27:
+        # ZAPIS I WYŚWIETLANIE
+        cfg.out_przod.write(frame_przod)
+        cfg.out_bok.write(frame_bok)
+        cv2.imshow('Siatkowka AI - PRZOD', frame_przod)
+        cv2.imshow('Siatkowka AI - BOK', frame_bok)
+
+        if cv2.waitKey(1) & 0xFF == 27:  # ESC
             break
 
     cfg.release()
+
 
 if __name__ == "__main__":
     main()
